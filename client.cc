@@ -65,22 +65,18 @@ class InvokeServerHandleClientMessageSink : public MessageSink<ClientMessage> {
   ServerMessage last_server_response_;
 };
 
-int ExecuteProtocol(int32_t paillier_modulus_size, std::string port, std::string client_data_file) {
-  ::private_join_and_compute::Context context;
-
-  std::cout << "Client: Loading data..." << std::endl;
-  auto maybe_client_data = ::private_join_and_compute::ReadClientDatasetFromFile(client_data_file, &context);
-  if (!maybe_client_data.ok()) {
-    return 1;
-  }
-  auto client_data = std::move(maybe_client_data.ValueOrDie());
+int ExecuteProtocol(Context* context,
+                    int32_t paillier_modulus_size,
+                    std::string port,
+                    const std::vector<std::string>& elements,
+                    const std::vector<BigNum>& values) {
 
   std::cout << "Client: Generating keys..." << std::endl;
   std::unique_ptr<::private_join_and_compute::ProtocolClient> client =
       absl::make_unique<::private_join_and_compute::PrivateIntersectionSumProtocolClientImpl>(
-          &context,
-          std::move(client_data.first),
-          std::move(client_data.second),
+          context,
+          elements,
+          values,
           paillier_modulus_size);
 
   // Consider grpc::SslServerCredentials if not running locally.
@@ -131,9 +127,20 @@ int ExecuteProtocol(int32_t paillier_modulus_size, std::string port, std::string
 int main(int argc, char** argv) {
   google::InitGoogleLogging(argv[0]);
 
+  ::private_join_and_compute::Context context;
+
+  std::cout << "Client: Loading data..." << std::endl;
+  auto maybe_client_data = ::private_join_and_compute::ReadClientDatasetFromFile("/tmp/dummy_client_data.csv", &context);
+  if (!maybe_client_data.ok()) {
+    return 1;
+  }
+  auto client_data = std::move(maybe_client_data.ValueOrDie());
+
   return private_join_and_compute::ExecuteProtocol(
+      &context,
       1536,
       "0.0.0.0:10501",
-      "/tmp/dummy_client_data.csv"
+      std::move(client_data.first),
+      std::move(client_data.second)
   );
 }

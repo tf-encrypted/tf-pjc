@@ -20,16 +20,16 @@ tf_configure(name = "local_config_tf")
 # Google Private Join and Compute
 #
 
-git_repository(
-    name = "com_github_google_private_join_and_compute",
-    remote = "https://github.com/mortendahl/private-join-and-compute.git",
-    branch = "master",
-)
-
-# local_repository(
+# git_repository(
 #     name = "com_github_google_private_join_and_compute",
-#     path = "../private-join-and-compute",
+#     remote = "https://github.com/mortendahl/private-join-and-compute.git",
+#     branch = "master",
 # )
+
+local_repository(
+    name = "com_github_google_private_join_and_compute",
+    path = "../private-join-and-compute",
+)
 
 #
 # Transitive dependencies for Google Private Join and Compute

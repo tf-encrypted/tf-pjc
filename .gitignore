@@ -1,0 +1,8 @@
+**.DS_Store
+
+.vscode
+
+.bazelrc
+bazel-*
+
+.mypy_cache/**

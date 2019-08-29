@@ -24,12 +24,22 @@
 #include "include/grpcpp/server_builder.h"
 #include "include/grpcpp/server_context.h"
 #include "include/grpcpp/support/status.h"
+
+#include "absl/time/time.h"
+#include "absl/synchronization/notification.h"
+
 #include "data_util.h"
 #include "server_impl.h"
 #include "private_join_and_compute.grpc.pb.h"
 #include "private_join_and_compute_rpc_impl.h"
 #include "protocol_server.h"
-#include "absl/memory/memory.h"
+
+struct ServerResource {
+  absl::Notification protocol_finished;
+  ::private_join_and_compute::Context context;
+  std::unique_ptr<::grpc::Server> grpc_server;
+  std::unique_ptr<::private_join_and_compute::PrivateJoinAndComputeRpcImpl> service;
+};
 
 int RunServer(std::string port) {
   std::cout << "Server: loading data... " << std::endl;
@@ -38,34 +48,45 @@ int RunServer(std::string port) {
     return 1;
   }
 
-  ::private_join_and_compute::Context context;
+  ServerResource* resource = new ServerResource;
+
+  {
   std::unique_ptr<::private_join_and_compute::ProtocolServer> server =
       absl::make_unique<::private_join_and_compute::PrivateIntersectionSumProtocolServerImpl>(
-          &context, std::move(maybe_server_identifiers.ValueOrDie()));
-  ::private_join_and_compute::PrivateJoinAndComputeRpcImpl service(std::move(server));
+          &resource->context,
+          &resource->protocol_finished,
+          std::move(maybe_server_identifiers.ValueOrDie())
+    );
+  resource->service =
+      absl::make_unique<::private_join_and_compute::PrivateJoinAndComputeRpcImpl>(std::move(server));
 
   ::grpc::ServerBuilder builder;
   // Consider grpc::SslServerCredentials if not running locally.
-  builder.AddListeningPort(port,
-                           ::grpc::experimental::LocalServerCredentials(
-                               grpc_local_connect_type::LOCAL_TCP));
-  builder.RegisterService(&service);
-  std::unique_ptr<::grpc::Server> grpc_server(builder.BuildAndStart());
+  builder.AddListeningPort(port, ::grpc::experimental::LocalServerCredentials(grpc_local_connect_type::LOCAL_TCP));
+  builder.RegisterService(resource->service.get());
+
+  resource->grpc_server = builder.BuildAndStart();
+  }
 
   // Run the server on a background thread.
-  std::thread grpc_server_thread(
-      [](::grpc::Server* grpc_server_ptr) {
-        grpc_server_ptr->Wait();
-      },
-      grpc_server.get());
+  // std::thread grpc_server_thread(
+  //     [](::grpc::Server* grpc_server_ptr) {
+  //       grpc_server_ptr->Wait();
+  //     },
+  //     grpc_server.get());
 
-  while (!service.protocol_finished()) {
-    // Wait for the server to be done, and then shut the server down.
+  std::cout << "Waiting..." << std::endl;
+  bool notified = resource->protocol_finished.WaitForNotificationWithTimeout(absl::Seconds(30));
+  if (!notified) {
+    std::cout << "Shutting down before notified." << std::endl;
+  } else {
+    std::cout << "Shutting down." << std::endl;
   }
 
   // Shut down server.
-  grpc_server->Shutdown();
-  grpc_server_thread.join();
+  resource->grpc_server->Shutdown();
+  resource->grpc_server->Wait();
+  // grpc_server_thread.join();
   std::cout << "Server completed protocol and shut down." << std::endl;
 
   return 0;
