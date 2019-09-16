@@ -22,7 +22,7 @@ setuptools.setup(
     extras_require={},
     license="Apache License 2.0",
     url="https://github.com/tf-encrypted/tf-pjc",
-    description="TODO",
+    description="Bridge between TensorFlow and Google's Private Join and Compute library",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="The TF Encrypted Authors",
