@@ -9,6 +9,6 @@ test: .bazelrc
 	bazel test ... --test_output=all
 
 build: .bazelrc
-	bazel build "//tf_psi:psi_ops_py"
+	bazel build "//tf_pjc:pjc_ops_py"
 
 .PHONY: clean test build

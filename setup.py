@@ -13,15 +13,15 @@ with open("README.md", "r") as fh:
   long_description = fh.read()
 
 setuptools.setup(
-    name="tf-psi",
+    name="tf-pjc",
     version="0.1.0",
     packages=setuptools.find_packages(),
-    package_data={'tf_psi': []},
+    package_data={'tf_pjc': []},
     python_requires="==3.7.*",
     install_requires=[],
     extras_require={},
     license="Apache License 2.0",
-    url="https://github.com/tf-encrypted/tf-psi",
+    url="https://github.com/tf-encrypted/tf-pjc",
     description="TODO",
     long_description=long_description,
     long_description_content_type="text/markdown",
