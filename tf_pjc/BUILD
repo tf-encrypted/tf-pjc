@@ -3,7 +3,7 @@ licenses(["notice"])  # Apache 2.0
 package(default_visibility = ["//visibility:public"])
 
 cc_binary(
-    name = 'python/_psi_ops.so',
+    name = 'python/_pjc_ops.so',
     srcs = [
         "cc/ops.cc",
         "cc/kernels.cc",
@@ -22,24 +22,37 @@ cc_binary(
 )
 
 py_library(
-    name = "psi_ops_py",
+    name = "pjc_ops_py",
     srcs = ([
         "python/ops.py",
+        "python/protocol.py",
     ]),
     data = [
-        ":python/_psi_ops.so"
+        ":python/_pjc_ops.so"
     ],
     srcs_version = "PY3",
 )
 
 py_test(
-    name = "psi_ops_py_test",
+    name = "pjc_ops_py_test",
     srcs = [
         "python/ops_test.py",
     ],
     main = "python/ops_test.py",
     deps = [
-        ":psi_ops_py",
+        ":pjc_ops_py",
+    ],
+    srcs_version = "PY3",
+)
+
+py_test(
+    name = "pjc_protocol_py_test",
+    srcs = [
+        "python/protocol_test.py",
+    ],
+    main = "python/protocol_test.py",
+    deps = [
+        ":pjc_ops_py",
     ],
     srcs_version = "PY3",
 )

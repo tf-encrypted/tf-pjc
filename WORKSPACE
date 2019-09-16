@@ -18,9 +18,10 @@ http_archive(
 #     branch = "master",
 # )
 
-local_repository(
+git_repository(
     name = "com_github_google_private_join_and_compute",
-    path = "/Users/dahl/work/mortendahl/private-join-and-compute",
+    remote = "https://github.com/mortendahl/private-join-and-compute.git",
+    branch = "wrapper",
 )
 
 http_archive(
