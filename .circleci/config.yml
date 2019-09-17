@@ -1,0 +1,666 @@
+version: 2.1
+
+commands:
+
+  bootstrap-macos:
+    steps:
+      - run:
+          name: Bootstrap macOS
+          command: |
+            HOMEBREW_NO_AUTO_UPDATE=1 brew tap bazelbuild/tap >> build.log
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install \
+                bazelbuild/tap/bazel mmv tree >> build.log
+
+            curl -O https://repo.anaconda.com/miniconda/Miniconda3-latest-MacOSX-x86_64.sh --silent
+            bash Miniconda3-latest-MacOSX-x86_64.sh -b -f >> build.log
+            ~/miniconda3/bin/conda create -n py3.5 python=3.5 -y
+            ln -s ~/miniconda3/envs/py3.5/bin/python ~/python3.5
+            ~/miniconda3/bin/conda create -n py3.6 python=3.6 -y
+            ln -s ~/miniconda3/envs/py3.6/bin/python ~/python3.6
+
+  create-pyenv:
+    # Create new Python virtual environment
+    parameters:
+      python-version:
+        type: string
+      python-environment:
+        type: string
+    steps:
+      - run:
+          name: Create Python << parameters.python-version >> environment '<< parameters.python-environment >>'
+          command: |
+            ~/python<< parameters.python-version >> -m venv << parameters.python-environment >>
+
+  build:
+    parameters:
+      python-version:
+        type: string
+      tensorflow-version:
+        type: string
+      # next parameter should be derived 
+      python-environment:
+        type: string
+    steps:
+      - create-pyenv:
+          python-environment: << parameters.python-environment >>
+          python-version: << parameters.python-version >>
+      - run:
+          name: Install requirements-dev.txt in '<< parameters.python-environment >>'
+          command: |
+            . << parameters.python-environment >>/bin/activate
+            pip install -q -U -r requirements-dev.txt
+            pip freeze
+      - run:
+          name: Install TensorFlow << parameters.tensorflow-version >> in '<< parameters.python-environment >>'
+          command: |
+            . << parameters.python-environment >>/bin/activate
+            make clean
+            pip install -q -U tensorflow==<< parameters.tensorflow-version >>
+            make .bazelrc
+            # reduce Bazel output to logs
+            echo 'test --noshow_progress --noshow_loading_progress' >> .bazelrc
+            echo 'build --noshow_progress --noshow_loading_progress' >> .bazelrc
+      - run:
+          name: Test in '<< parameters.python-environment >>'
+          command: |
+            . << parameters.python-environment >>/bin/activate
+            python --version
+            pip freeze
+            make test
+      - run:
+          name: Build in '<< parameters.python-environment >>'
+          command: |
+            . << parameters.python-environment >>/bin/activate
+            python --version
+            pip freeze
+            DIR_TAGGED=./out/builds/py<< parameters.python-version >>-tf<< parameters.tensorflow-version >> make build
+      - persist_to_workspace:
+          root: ./out
+          paths:
+            - builds/py<< parameters.python-version >>-tf<< parameters.tensorflow-version >>
+  
+  bundle:
+    parameters:
+      python-version:
+        type: string
+      # next parameter should be derived 
+      python-environment:
+        type: string
+    steps:
+      - create-pyenv:
+          python-environment: << parameters.python-environment >>
+          python-version: << parameters.python-version >>
+      - run:
+          name: Install requirements-dev.txt in '<< parameters.python-environment >>'
+          command: |
+            . << parameters.python-environment >>/bin/activate
+            pip install -q -U -r requirements-dev.txt
+            pip freeze
+      - attach_workspace:
+          at: ./out
+      - run:
+          name: Merge builds
+          command: |
+            tree ./out
+            rsync -avm ./out/builds/*/ ./out/merged
+            tree ./out
+      - run:
+          name: Bundle package in '<< parameters.python-environment >>'
+          command: |
+            . << parameters.python-environment >>/bin/activate
+            python --version
+            pip freeze
+            DIR_TAGGED=./out/merged DIR_WHEEL=./out/wheelhouse make bundle
+            tree ./out
+      - persist_to_workspace:
+          root: ./out
+          paths:
+            - 'wheelhouse'
+
+  whltest:
+    parameters:
+      python-version:
+        type: string
+      tensorflow-version:
+        type: string
+      python-environment:
+        type: string
+    steps:
+      - create-pyenv:
+          python-version: << parameters.python-version >>
+          python-environment: << parameters.python-environment >>
+      - attach_workspace:
+          at: ./out
+      - run:
+          name: Configure '<< parameters.python-environment >>' to use TensorFlow << parameters.tensorflow-version >>
+          command: |
+            set -e
+            set -x
+            tree ./out/wheelhouse
+            . << parameters.python-environment >>/bin/activate
+            # we want to make sure that tests are run against whatever is
+            # in the wheelhouse; for this we'd like to use --no-index but
+            # that will also block dependencies from being installed.
+            # as a result we first install dependencies by installing the
+            # package and then immediately remove it again
+            pip install -q -U tf-pjc --find-links ./out/wheelhouse
+            pip uninstall tf-pjc -y
+            # install the package, but forced to only use the wheelhouse
+            pip install -U tf-pjc --no-deps --no-cache-dir --no-index --find-links ./out/wheelhouse
+            # make sure we are testing against the right version of TensorFlow
+            pip install -q -U tensorflow==<< parameters.tensorflow-version >>
+      - run:
+          name: Test wheel in '<< parameters.python-environment >>'
+          command: |
+            . << parameters.python-environment >>/bin/activate
+            python --version
+            pip freeze
+            make pytest
+
+jobs:
+
+  build-linux:
+    parameters:
+      python-version:
+        type: string
+      tensorflow-version:
+        type: string
+    docker:
+      - image: tfencrypted/tf-big:build
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - build:
+          python-version: << parameters.python-version >>
+          tensorflow-version: << parameters.tensorflow-version >>
+          python-environment: build-linux-py<< parameters.python-version >>-tf<< parameters.tensorflow-version >>
+
+  build-macos:
+    parameters:
+      python-version:
+        type: string
+      tensorflow-version:
+        type: string
+    macos:
+      xcode: "10.0.0"
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - bootstrap-macos
+      - build:
+          python-version: << parameters.python-version >>
+          tensorflow-version: << parameters.tensorflow-version >>
+          python-environment: build-macos-py<< parameters.python-version >>-tf<< parameters.tensorflow-version >>
+
+  bundle-linux:
+    parameters:
+      python-version:
+        type: string
+    docker:
+      - image: tfencrypted/tf-big:build
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - bundle:
+          python-version: << parameters.python-version >>
+          python-environment: bundle-linux-py<< parameters.python-version >>
+
+  bundle-macos:
+    parameters:
+      python-version:
+        type: string
+    macos:
+      xcode: "10.0.0"
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - bootstrap-macos
+      - bundle:
+          python-version: << parameters.python-version >>
+          python-environment: bundle-macos-py<< parameters.python-version >>
+
+  whltest-linux:
+    parameters:
+      python-version:
+        type: string
+      tensorflow-version:
+        type: string
+    docker:
+      - image: tfencrypted/tf-big:whltest
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - whltest:
+          python-version: << parameters.python-version >>
+          python-environment: test-linux-py<< parameters.python-version >>
+          tensorflow-version: << parameters.tensorflow-version >>
+
+  whltest-macos:
+    parameters:
+      python-version:
+        type: string
+      tensorflow-version:
+        type: string
+    macos:
+      xcode: "10.0.0"
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - bootstrap-macos
+      - whltest:
+          python-version: << parameters.python-version >>
+          python-environment: test-macos-py<< parameters.python-version >>
+          tensorflow-version: << parameters.tensorflow-version >>
+
+  store:
+    docker:
+      - image: tfencrypted/tf-big:deploy
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - attach_workspace:
+          at: ./out
+      - run:
+          name: List content to be stored
+          command: |
+            tree ./out/wheelhouse
+      - store_artifacts:
+          path: ./out/wheelhouse
+          destination: wheelhouse
+
+  deploy:
+    docker:
+      - image: tfencrypted/tf-big:deploy
+    working_directory: ~/repo
+    steps:
+      - checkout
+      - create-pyenv:
+          python-version: "3.6"
+          python-environment: "deploy-py3.6"
+      - attach_workspace:
+          at: ./out
+      - run:
+          name: Configure 'deploy-3.6'
+          command: |
+            . deploy-py3.6/bin/activate
+            pip install -q -U -r requirements-dev.txt
+      - run:
+          name: Upload to PyPI
+          command: |
+            tree ./out/wheelhouse
+            . deploy-py3.6/bin/activate
+            DIR_WHEEL=./out/wheelhouse make push-wheels
+
+workflows:
+  version: 2
+  
+  # these workflows implement the following logic:
+  # - non-master branch: run quick tests
+  # - master branch: build, test, and store wheels
+  # - non-semver tag: build, test, and store wheels
+  # - semver tag: build, test, store, and deploy wheels 
+
+  quicktest:
+    jobs:
+      - build-linux:
+          name: build-linux-py3.6-tf1.14.0
+          python-version: "3.6"
+          tensorflow-version: "1.14.0"
+          filters:
+            branches:
+              ignore: master
+            tags:
+              ignore: /.*/
+
+      - bundle-linux:
+          name: bundle-linux-py3.6
+          python-version: "3.6"
+          requires:
+            - build-linux-py3.6-tf1.14.0
+          filters:
+            branches:
+              ignore: master
+            tags:
+              ignore: /.*/
+
+      - whltest-linux:
+          name: whltest-linux-py3.6-tf1.14.0
+          python-version: "3.6"
+          tensorflow-version: "1.14.0"
+          requires:
+            - bundle-linux-py3.6
+          filters:
+            branches:
+              ignore: master
+            tags:
+              ignore: /.*/
+
+  linux-py3.5:
+    jobs:
+      - build-linux:
+          name: build-linux-py3.5-tf1.13.1
+          python-version: "3.5"
+          tensorflow-version: "1.13.1"
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - build-linux:
+          name: build-linux-py3.5-tf1.13.2
+          python-version: "3.5"
+          tensorflow-version: "1.13.2"
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - build-linux:
+          name: build-linux-py3.5-tf1.14.0
+          python-version: "3.5"
+          tensorflow-version: "1.14.0"
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - bundle-linux:
+          name: bundle-linux-py3.5
+          python-version: "3.5"
+          requires:
+            - build-linux-py3.5-tf1.13.1
+            - build-linux-py3.5-tf1.13.2
+            - build-linux-py3.5-tf1.14.0
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - whltest-linux:
+          name: whltest-linux-py3.5-tf1.13.1
+          python-version: "3.5"
+          tensorflow-version: "1.13.1"
+          requires:
+            - bundle-linux-py3.5
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - whltest-linux:
+          name: whltest-linux-py3.5-tf1.13.2
+          python-version: "3.5"
+          tensorflow-version: "1.13.2"
+          requires:
+            - bundle-linux-py3.5
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - whltest-linux:
+          name: whltest-linux-py3.5-tf1.14.0
+          python-version: "3.5"
+          tensorflow-version: "1.14.0"
+          requires:
+            - bundle-linux-py3.5
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - store:
+          name: store-linux-py3.5
+          requires:
+            - whltest-linux-py3.5-tf1.13.1
+            - whltest-linux-py3.5-tf1.13.2
+            - whltest-linux-py3.5-tf1.14.0
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - hold:
+          type: approval
+          name: hold-linux-py3.5
+          requires:
+           - store-linux-py3.5
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^(?:[0-9]+)\.(?:[0-9]+)\.(?:[0-9]+)(?:(\-rc[0-9]+)?)$/
+
+      - deploy:
+          name: deploy-linux-py3.5
+          requires:
+            - hold-linux-py3.5
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^(?:[0-9]+)\.(?:[0-9]+)\.(?:[0-9]+)(?:(\-rc[0-9]+)?)$/
+
+  linux-py3.6:
+    jobs:
+      - build-linux:
+          name: build-linux-py3.6-tf1.13.1
+          python-version: "3.6"
+          tensorflow-version: "1.13.1"
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - build-linux:
+          name: build-linux-py3.6-tf1.13.2
+          python-version: "3.6"
+          tensorflow-version: "1.13.2"
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - build-linux:
+          name: build-linux-py3.6-tf1.14.0
+          python-version: "3.6"
+          tensorflow-version: "1.14.0"
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - bundle-linux:
+          name: bundle-linux-py3.6
+          python-version: "3.6"
+          requires:
+            - build-linux-py3.6-tf1.13.1
+            - build-linux-py3.6-tf1.13.2
+            - build-linux-py3.6-tf1.14.0
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - whltest-linux:
+          name: whltest-linux-py3.6-tf1.13.1
+          python-version: "3.6"
+          tensorflow-version: "1.13.1"
+          requires:
+            - bundle-linux-py3.6
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - whltest-linux:
+          name: whltest-linux-py3.6-tf1.13.2
+          python-version: "3.6"
+          tensorflow-version: "1.13.2"
+          requires:
+            - bundle-linux-py3.6
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - whltest-linux:
+          name: whltest-linux-py3.6-tf1.14.0
+          python-version: "3.6"
+          tensorflow-version: "1.14.0"
+          requires:
+            - bundle-linux-py3.6
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - store:
+          name: store-linux-py3.6
+          requires:
+            - whltest-linux-py3.6-tf1.13.1
+            - whltest-linux-py3.6-tf1.13.2
+            - whltest-linux-py3.6-tf1.14.0
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - hold:
+          type: approval
+          name: hold-linux-py3.6
+          requires:
+           - store-linux-py3.6
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^(?:[0-9]+)\.(?:[0-9]+)\.(?:[0-9]+)(?:(\-rc[0-9]+)?)$/
+
+      - deploy:
+          name: deploy-linux-py3.6
+          requires:
+            - hold-linux-py3.6
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^(?:[0-9]+)\.(?:[0-9]+)\.(?:[0-9]+)(?:(\-rc[0-9]+)?)$/
+
+  macos-py3.6:
+    jobs:
+      - build-macos:
+          name: build-macos-py3.6-tf1.13.1
+          python-version: "3.6"
+          tensorflow-version: "1.13.1"
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - build-macos:
+          name: build-macos-py3.6-tf1.13.2
+          python-version: "3.6"
+          tensorflow-version: "1.13.2"
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - build-macos:
+          name: build-macos-py3.6-tf1.14.0
+          python-version: "3.6"
+          tensorflow-version: "1.14.0"
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - bundle-macos:
+          name: bundle-macos-py3.6
+          python-version: "3.6"
+          requires:
+            - build-macos-py3.6-tf1.13.1
+            - build-macos-py3.6-tf1.13.2
+            - build-macos-py3.6-tf1.14.0
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - whltest-macos:
+          name: whltest-macos-py3.6-tf1.13.1
+          python-version: "3.6"
+          tensorflow-version: "1.13.1"
+          requires:
+            - bundle-macos-py3.6
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - whltest-macos:
+          name: whltest-macos-py3.6-tf1.13.2
+          python-version: "3.6"
+          tensorflow-version: "1.13.2"
+          requires:
+            - bundle-macos-py3.6
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+      - whltest-macos:
+          name: whltest-macos-py3.6-tf1.14.0
+          python-version: "3.6"
+          tensorflow-version: "1.14.0"
+          requires:
+            - bundle-macos-py3.6
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - store:
+          name: store-macos-py3.6
+          requires:
+            - whltest-macos-py3.6-tf1.13.1
+            - whltest-macos-py3.6-tf1.13.2
+            - whltest-macos-py3.6-tf1.14.0
+          filters:
+            branches:
+              only: master
+            tags:
+              only: /.*/
+
+      - hold:
+          type: approval
+          name: hold-macos-py3.6
+          requires:
+           - store-macos-py3.6
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^(?:[0-9]+)\.(?:[0-9]+)\.(?:[0-9]+)(?:(\-rc[0-9]+)?)$/
+
+      - deploy:
+          name: deploy-macos-py3.6
+          requires:
+            - hold-macos-py3.6
+          filters:
+            branches:
+              ignore: /.*/
+            tags:
+              only: /^(?:[0-9]+)\.(?:[0-9]+)\.(?:[0-9]+)(?:(\-rc[0-9]+)?)$/
